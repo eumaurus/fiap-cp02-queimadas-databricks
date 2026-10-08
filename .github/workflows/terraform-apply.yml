@@ -1,0 +1,70 @@
+name: provision-mysql-queimadas
+
+on:
+  workflow_dispatch:
+    inputs:
+      location:
+        description: "Regiao Azure do MySQL (ex.: eastus2, centralus, westus3)"
+        required: true
+        default: "eastus2"
+
+env:
+  TF_VAR_mysql_admin_password: ${{ secrets.MYSQL_ADMIN_PASSWORD }}
+  TF_VAR_location: ${{ inputs.location }}
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Exportar subscription e registrar provider do MySQL
+        run: |
+          echo "ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
+          az provider register --namespace Microsoft.DBforMySQL --wait || echo "Aviso: nao foi possivel registrar o provider (provavelmente ja esta registrado)."
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Resumo (host do MySQL para usar no Databricks)
+        run: |
+          {
+            echo "## MySQL provisionado"
+            echo ""
+            echo "| Item | Valor |"
+            echo "|---|---|"
+            echo "| Resource Group | $(terraform output -raw resource_group_name) |"
+            echo "| Servidor | $(terraform output -raw mysql_server_name) |"
+            echo "| Host (FQDN) | $(terraform output -raw mysql_fqdn) |"
+            echo "| Banco | $(terraform output -raw database_name) |"
+            echo "| Usuario admin | $(terraform output -raw mysql_admin_username) |"
+            echo "| Regiao | ${{ inputs.location }} |"
+          } >> $GITHUB_STEP_SUMMARY
